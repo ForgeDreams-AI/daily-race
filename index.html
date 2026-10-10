@@ -81,7 +81,7 @@
     <div><span id="zone" class="z1">Easy stretch</span></div>
   </div>
   <button id="pauseBtn" aria-label="Pause">&#10074;&#10074;</button>
-  <div id="penFlash">+3s CRASH</div>
+  <div id="penFlash">&#128165;</div>
   <div id="steerHint">&#9664; HOLD LEFT / RIGHT TO STEER &#9654;</div>
   <div id="touchL" class="touchInd">&#9664;</div>
   <div id="touchR" class="touchInd">&#9654;</div>
@@ -97,7 +97,7 @@
     <button class="btn" id="playBtn">PLAY</button>
     <button class="btn ghost" id="practiceBtn">Practice run</button>
     <p class="howto"><b>Hold the LEFT or RIGHT side of the screen to steer</b> &mdash; your car accelerates on its own and always points up.<br>
-    Same track for everyone today &mdash; it gets meaner the further you go, and the final stretch is the nastiest part. Lowest time wins.</p>
+    4 lanes narrow down to 2 &mdash; overtake the slower traffic. Barriers just pop you in the air, oil sends you spinning. Lowest time wins.</p>
   </div>
 
   <div id="resultScreen" class="overlay hidden">
@@ -135,6 +135,9 @@ function normAng(a){while(a>Math.PI)a-=2*Math.PI;while(a<-Math.PI)a+=2*Math.PI;r
 var SEG_LEN=90, NSEG=150, SAMPLES=4;
 var MAXV=320, ACCEL=400, TURNSPD=3.1;
 var CAR_HALF_W=18, BOUNCE_KEEP=0.8;
+var LANE_W=58;                        /* road width = lane count x lane width */
+var AIR_DUR=0.65, SPIN_DUR=0.6;        /* bomb pop / oil spin durations */
+function lanesOfZone(z){return [4,3,2][z];}   /* 4 lanes early -> 3 -> 2 at the end */
 var ZONE_NAMES=["Easy stretch","Tight turns","Hazard zone"];
 var ZONE_COLORS=["#22c55e","#eab308","#ef4444"];
 function zoneOf(i){return i<NSEG/3?0:(i<2*NSEG/3?1:2);}
@@ -170,8 +173,7 @@ function generateTrack(seedStr){
   for(var j=0;j<NSEG;j++){
     hd2+=curvs[j];
     x+=Math.sin(hd2)*SEG_LEN; y-=Math.cos(hd2)*SEG_LEN;
-    var w=150+(95-150)*(j/(NSEG-1))+(rng()*2-1)*8;
-    if(w<85)w=85;
+    var w=lanesOfZone(zoneOf(j))*LANE_W+(rng()*2-1)*5;
     cx.push(x);cy.push(y);cw.push(w);chd.push(hd2);
   }
   /* dense smooth centerline: Catmull-Rom through the control points */
@@ -205,9 +207,29 @@ function generateTrack(seedStr){
       lastBlockerSeg=m;
     }
   }
+  /* AI traffic: slower cars in their lanes, denser toward the end — always dodgeable:
+     min 6-segment gaps between cars, never within 4 segments of a blocker, start area clear */
+  var traffic=[],lastTrafficSeg=-10;
+  var TCOLORS=['#ef4444','#f59e0b','#a855f7','#22c55e','#eab308','#f472b6'];
+  for(var tm=8;tm<NSEG-2;tm++){
+    var tz=zoneOf(tm);
+    var dens=[0.30,0.48,0.65][tz];
+    if(rng()<dens&&(tm-lastTrafficSeg)>=6){
+      var bclear=true;
+      for(var bq=0;bq<blockers.length;bq++){if(Math.abs(blockers[bq].seg-tm*SAMPLES)<4*SAMPLES){bclear=false;break;}}
+      if(bclear){
+        var nl=lanesOfZone(tz);
+        var lane=Math.floor(rng()*nl);
+        traffic.push({seg:tm*SAMPLES,lane:lane,off:(lane-(nl-1)/2)*LANE_W,
+                      speed:120+rng()*55,color:TCOLORS[Math.floor(rng()*TCOLORS.length)],
+                      wob:rng()*6.283,done:false});
+        lastTrafficSeg=tm;
+      }
+    }
+  }
   var checkpoints=[];
   for(var c=0;c<NSEG;c+=10)checkpoints.push(Math.min(c*SAMPLES,NS-1));
-  return {pts:pts,NS:NS,oils:oils,boosts:boosts,blockers:blockers,checkpoints:checkpoints,finishSeg:NS-1};
+  return {pts:pts,NS:NS,oils:oils,boosts:boosts,blockers:blockers,traffic:traffic,checkpoints:checkpoints,finishSeg:NS-1};
 }
 
 function ptSegDist(px,py,ax,ay,bx,by){
@@ -234,8 +256,9 @@ function queryTrack(tr,px,py,fromSeg){
 }
 function createCar(tr){
   var p=tr.pts[0];
-  return {x:p.x,y:p.y,hd:p.hd,speed:0,seg:0,steerSm:0,oilUntil:-1,boostUntil:-1,
-          invulnUntil:-1,guideUntil:-1,penalty:0,finished:false,crashed:false,bounced:false};
+  return {x:p.x,y:p.y,hd:p.hd,speed:0,seg:0,steerSm:0,boostUntil:-1,oilCd:-1,
+          invulnUntil:-1,guideUntil:-1,airUntil:-1,spinUntil:-1,
+          finished:false,popped:false,bounced:false};
 }
 function blockerPos(tr,b,t){
   var c=tr.pts[b.seg],H=c.w/2;
@@ -243,13 +266,41 @@ function blockerPos(tr,b,t){
   var off=b.side*(H*0.42+Math.sin(t*b.freq+b.phase)*H*0.06);
   return {x:c.x+Math.cos(c.hd)*off, y:c.y+Math.sin(c.hd)*off, off:off, H:H};
 }
+/* bomb pop: the car pops into the air, keeps its momentum, lands and keeps going —
+   no restart, no time penalty. Airborne + brief grace after landing = no chain-hits. */
+function popBomb(car,t){
+  car.airUntil=t+AIR_DUR;
+  car.invulnUntil=t+AIR_DUR+0.5;
+  car.oilCd=Math.max(car.oilCd,t+1.2);
+  car.popped=true;
+  car.x-=Math.sin(car.hd)*24;   /* nudge back so it doesn't land inside the same hazard */
+  car.y+=Math.cos(car.hd)*24;
+}
+function trafficXY(tr,tc,t){
+  var s=clamp(Math.floor(tc.seg),0,tr.NS-1),p=tr.pts[s];
+  var off=tc.off+Math.sin(t*0.9+tc.wob)*6;   /* slight natural wobble in the lane */
+  return {x:p.x+Math.cos(p.hd)*off,y:p.y+Math.sin(p.hd)*off,hd:p.hd};
+}
+function stepTraffic(tr,car,dt,t){
+  for(var i=0;i<tr.traffic.length;i++){
+    var tc=tr.traffic[i];
+    if(tc.done)continue;
+    tc.seg+=tc.speed*dt/(SEG_LEN/SAMPLES);
+    if(tc.seg>=tr.NS-2||tc.seg<car.seg-60){tc.done=true;continue;}
+    if(t>car.invulnUntil&&t>=car.airUntil){
+      var q=trafficXY(tr,tc,t),dx=car.x-q.x,dy=car.y-q.y;
+      if(dx*dx+dy*dy<30*30)popBomb(car,t);
+    }
+  }
+}
 /* inp: {steer:-1..1}. t = seconds since GO. */
 function stepCar(tr,car,inp,dt,t){
   if(car.finished)return;
   /* smooth the steering input so it never snaps */
-  car.steerSm+=(clamp(inp.steer,-1,1)-car.steerSm)*Math.min(1,dt*10);
+  /* no steering while airborne (bomb pop) or spinning (oil) */
+  var steerIn=(t<car.airUntil||t<car.spinUntil)?0:clamp(inp.steer,-1,1);
+  car.steerSm+=(steerIn-car.steerSm)*Math.min(1,dt*10);
   var effMax=MAXV;
-  if(t<car.oilUntil)effMax*=0.72;
   if(t<car.boostUntil)effMax=MAXV*1.4;
   if(car.speed<effMax){
     car.speed+=(ACCEL*(1.05-car.speed/effMax))*dt;   /* smooth asymptotic acceleration */
@@ -257,11 +308,9 @@ function stepCar(tr,car,inp,dt,t){
   }
   if(t<car.boostUntil&&car.speed<effMax){car.speed+=ACCEL*1.5*dt;if(car.speed>effMax)car.speed=effMax;}
   if(car.speed<0)car.speed=0;
-  var grip=(t<car.oilUntil)?0.45:1.0;
   var speedFrac=Math.min(car.speed/MAXV,1);
-  var turnAuth=TURNSPD*(1.2-0.7*speedFrac)*grip;   /* nimble when slow, stable at speed */
+  var turnAuth=TURNSPD*(1.2-0.7*speedFrac);   /* nimble when slow, stable at speed */
   car.hd+=car.steerSm*turnAuth*dt;
-  if(t<car.oilUntil)car.hd+=Math.sin(t*22+car.x*0.01)*0.55*dt;  /* brief low-grip slide wobble */
   car.x+=Math.sin(car.hd)*car.speed*dt;
   car.y-=Math.cos(car.hd)*car.speed*dt;
   var q=queryTrack(tr,car.x,car.y,car.seg);
@@ -286,12 +335,13 @@ function stepCar(tr,car,inp,dt,t){
     car.hd+=normAng(q.hd-car.hd)*Math.min(1,dt*6);
   }
   var i,dx2,dy2;
-  if(t>=car.oilUntil){
+  /* oil: full 360° spin — car keeps its forward momentum, brief steering loss, no crash */
+  if(t>=car.oilCd&&t>=car.airUntil){
     for(i=0;i<tr.oils.length;i++){var o=tr.oils[i];
       if(Math.abs(o.seg-q.seg)<=SAMPLES){
         var c=tr.pts[o.seg],ox=c.x+Math.cos(c.hd)*o.lat*(c.w/2),oy=c.y+Math.sin(c.hd)*o.lat*(c.w/2);
         dx2=car.x-ox;dy2=car.y-oy;
-        if(dx2*dx2+dy2*dy2<o.r*o.r){car.oilUntil=t+1.5;break;}
+        if(dx2*dx2+dy2*dy2<o.r*o.r){car.spinUntil=t+SPIN_DUR;car.oilCd=t+1.5;break;}
       }
     }
   }
@@ -305,22 +355,17 @@ function stepCar(tr,car,inp,dt,t){
       }
     }
   }
-  if(t>car.invulnUntil){
+  /* blockers: bomb pop — car pops up, keeps momentum, lands and keeps going */
+  if(t>car.invulnUntil&&t>=car.airUntil){
     for(i=0;i<tr.blockers.length;i++){var bl=tr.blockers[i];
       if(Math.abs(bl.seg-q.seg)<=2*SAMPLES){
         var bp=blockerPos(tr,bl,t);
-        dx2=car.x-bp.x;dy2=car.y-bp.y;var rr=bl.r+10;
-        if(dx2*dx2+dy2*dy2<rr*rr){
-          var cpSeg=0;
-          for(var c3=tr.checkpoints.length-1;c3>=0;c3--){if(tr.checkpoints[c3]<=car.seg){cpSeg=tr.checkpoints[c3];break;}}
-          var cp=tr.pts[cpSeg];
-          car.x=cp.x;car.y=cp.y;car.hd=cp.hd;car.speed=90;car.seg=cpSeg;car.steerSm=0;
-          car.penalty+=3;car.invulnUntil=t+2.0;car.oilUntil=-1;car.boostUntil=-1;car.guideUntil=-1;car.crashed=true;
-          break;
-        }
+        dx2=car.x-bp.x;dy2=car.y-bp.y;var brad=bl.r+10;
+        if(dx2*dx2+dy2*dy2<brad*brad){popBomb(car,t);break;}
       }
     }
   }
+  stepTraffic(tr,car,dt,t);
   /* finish: car reached the end of the final segment (within a few px of the finish point) */
   var fp0=tr.pts[tr.finishSeg-1],fp1=tr.pts[tr.finishSeg];
   var fdx=fp1.x-fp0.x,fdy=fp1.y-fp0.y,fl=Math.sqrt(fdx*fdx+fdy*fdy)||1;
@@ -447,7 +492,7 @@ function finishRace(){
   pauseBtn.style.display='none';
   touchL.style.display='none';touchR.style.display='none';
   steerHint.style.opacity='0';
-  var totalMs=(raceT+car.penalty)*1000;
+  var totalMs=raceT*1000;
   var ds=dateStr(),s=load(),isBest=false;
   if(!practice){
     var day=s.days[ds]||(s.days[ds]={best:0,plays:0});
@@ -465,10 +510,11 @@ function finishRace(){
   document.getElementById('shareMsg').textContent='';
   resultScreen.classList.remove('hidden');
 }
-function flashPenalty(){
+function flashPop(){
+  penFlash.textContent='\uD83D\uDCA5';
   penFlash.style.opacity='1';
   if(penTimer)clearTimeout(penTimer);
-  penTimer=setTimeout(function(){penFlash.style.opacity='0';},900);
+  penTimer=setTimeout(function(){penFlash.style.opacity='0';},600);
 }
 
 /* ---------- pre-rendered texture tiles (built once, reused every frame) ---------- */
@@ -537,7 +583,18 @@ function drawWheel(x,y,ang){
 /* car is drawn in SCREEN space, always pointing straight up */
 function drawCarScreen(){
   var sx=cssW/2,sy=cssH*0.62;
+  /* oil spin: the car sprite does a full 360 while the world keeps its heading */
+  var spinA=0,airH=0;
+  if(car&&state==='racing'){
+    if(raceT<car.spinUntil){var sp=1-(car.spinUntil-raceT)/SPIN_DUR;spinA=clamp(sp,0,1)*Math.PI*2;}
+    if(raceT<car.airUntil){var ap=1-(car.airUntil-raceT)/AIR_DUR;airH=Math.sin(clamp(ap,0,1)*Math.PI);}
+  }
   ctx.save();ctx.translate(sx,sy);
+  /* shadow: grows and drifts while the car is airborne */
+  ctx.fillStyle='rgba(0,0,0,'+(0.35-0.15*airH).toFixed(3)+')';
+  ctx.beginPath();ctx.ellipse(3+6*airH,5+10*airH,17+16*airH,25+20*airH,0,0,6.283);ctx.fill();
+  ctx.scale(1+0.45*airH,1+0.45*airH);
+  ctx.rotate(spinA);
   var st=car?car.steerSm:0;
   /* boost flame */
   if(car&&state==='racing'&&raceT<car.boostUntil){
@@ -547,9 +604,6 @@ function drawCarScreen(){
     ctx.fillStyle=fg;
     ctx.beginPath();ctx.moveTo(-7,20);ctx.lineTo(7,20);ctx.lineTo(0,34+fl);ctx.closePath();ctx.fill();
   }
-  /* soft shadow */
-  ctx.fillStyle='rgba(0,0,0,0.35)';
-  ctx.beginPath();ctx.ellipse(3,5,17,25,0,0,6.283);ctx.fill();
   /* wheels: front pair angles with steering */
   drawWheel(-13.5,-13,st*0.45);drawWheel(13.5,-13,st*0.45);
   drawWheel(-13.5,13,0);drawWheel(13.5,13,0);
@@ -659,6 +713,26 @@ function render(){
     ctx.stroke();
   }
 
+  /* dashed lane divider lines — lanes step down by zone: 4 -> 3 -> 2 */
+  ctx.strokeStyle='rgba(240,245,252,0.40)';ctx.lineWidth=3;ctx.setLineDash([20,22]);
+  var lrun=0;
+  for(i=1;i<=NS;i++){
+    if(i===NS||pts[i].zone!==pts[lrun].zone){
+      var ln=lanesOfZone(pts[lrun].zone),LH=ln*LANE_W/2;
+      for(var k=1;k<ln;k++){
+        var doff=-LH+k*LANE_W;
+        ctx.beginPath();
+        for(j=lrun;j<i;j++){
+          var dp=pts[j],dlx=dp.x+Math.cos(dp.hd)*doff,dly=dp.y+Math.sin(dp.hd)*doff;
+          if(j===lrun)ctx.moveTo(dlx,dly);else ctx.lineTo(dlx,dly);
+        }
+        ctx.stroke();
+      }
+      lrun=i;
+    }
+  }
+  ctx.setLineDash([]);
+
   /* center dashes */
   ctx.strokeStyle='rgba(255,255,255,0.15)';ctx.lineWidth=3;ctx.setLineDash([16,22]);
   ctx.beginPath();ctx.moveTo(pts[0].x,pts[0].y);
@@ -700,8 +774,8 @@ function render(){
     ctx.fillStyle='#4ade80';
     for(var ch=0;ch<2;ch++){var yy=-15+ch*17;
       ctx.beginPath();
-      ctx.moveTo(-15,yy);ctx.lineTo(0,yy+11);ctx.lineTo(15,yy);
-      ctx.lineTo(15,yy+7);ctx.lineTo(0,yy+18);ctx.lineTo(-15,yy+7);
+      ctx.moveTo(-15,yy);ctx.lineTo(0,yy-11);ctx.lineTo(15,yy);
+      ctx.lineTo(15,yy-7);ctx.lineTo(0,yy-18);ctx.lineTo(-15,yy-7);
       ctx.closePath();ctx.fill();
     }
     ctx.restore();
@@ -731,6 +805,26 @@ function render(){
     ctx.restore();
   }
 
+  /* AI traffic: simple colored cars cruising their lanes, slower than the player */
+  for(j=0;j<track.traffic.length;j++){
+    var tc=track.traffic[j];
+    if(tc.done)continue;
+    var tq=trafficXY(track,tc,raceT);
+    if(!inR(tq.x,tq.y))continue;
+    ctx.save();ctx.translate(tq.x,tq.y);ctx.rotate(tq.hd);
+    ctx.fillStyle='rgba(0,0,0,0.30)';
+    ctx.beginPath();ctx.ellipse(2,3,14,20,0,0,6.283);ctx.fill();
+    ctx.fillStyle='#05070c';
+    ctx.fillRect(-14,-14,5,9);ctx.fillRect(9,-14,5,9);ctx.fillRect(-14,6,5,9);ctx.fillRect(9,6,5,9);
+    ctx.fillStyle=tc.color;rr(-10,-17,20,34,7);ctx.fill();
+    ctx.strokeStyle='rgba(0,0,0,0.5)';ctx.lineWidth=1.5;rr(-10,-17,20,34,7);ctx.stroke();
+    ctx.fillStyle='rgba(200,225,250,0.85)';
+    ctx.beginPath();ctx.moveTo(-6,-5);ctx.lineTo(6,-5);ctx.lineTo(4,-12);ctx.lineTo(-4,-12);ctx.closePath();ctx.fill();
+    ctx.fillStyle='#0b1c2c';rr(-6,-3,12,9,3);ctx.fill();
+    ctx.fillStyle='#fde047';ctx.fillRect(-7.5,-17,3.5,2.5);ctx.fillRect(4,-17,3.5,2.5);
+    ctx.restore();
+  }
+
   /* dust puffs */
   for(j=0;j<dust.length;j++){
     var d=dust[j];
@@ -753,7 +847,7 @@ function loop(ts){
   if(state==='racing'&&track&&car){
     raceT+=dt;
     stepCar(track,car,input,dt,raceT);
-    if(car.crashed){car.crashed=false;flashPenalty();}
+    if(car.popped){car.popped=false;flashPop();}
     if(car.bounced){car.bounced=false;puff(car.x,car.y,0,0,8,90,0.6,9);}
     /* camera: ease the world rotation toward the car's heading */
     camHd+=normAng(car.hd-camHd)*Math.min(1,dt*7);
@@ -769,7 +863,7 @@ function loop(ts){
       dp.x+=dp.vx*dt;dp.y+=dp.vy*dt;dp.vx*=0.94;dp.vy*=0.94;dp.life-=dt;
       if(dp.life<=0)dust.splice(i,1);
     }
-    var totalMs=(raceT+car.penalty)*1000;
+    var totalMs=raceT*1000;
     timerEl.textContent=fmt(totalMs);
     var pct=Math.round(100*car.seg/track.finishSeg);
     pfill.style.width=pct+'%';
