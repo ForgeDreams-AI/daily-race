@@ -29,6 +29,9 @@
     color: #e8edf5; font-size: 16px; font-weight: 800; display: none; }
   #penFlash { position: absolute; top: 34%; left: 0; right: 0; z-index: 7; text-align: center; pointer-events: none;
     font-size: 26px; font-weight: 800; color: #ef4444; opacity: 0; transition: opacity .25s; }
+  #steerHint { position: absolute; bottom: 17%; left: 0; right: 0; z-index: 8; text-align: center; pointer-events: none;
+    font-size: 19px; font-weight: 800; letter-spacing: 2px; color: #7dd3fc; opacity: 0; transition: opacity .4s;
+    text-shadow: 0 0 14px rgba(56,189,248,.6); }
   /* ---------- Overlays ---------- */
   .overlay { position: absolute; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center;
     justify-content: center; background: rgba(5,8,14,.9); backdrop-filter: blur(6px);
@@ -46,7 +49,7 @@
     letter-spacing: 1px; border: none; border-radius: 16px; background: #38bdf8; color: #04121f; cursor: pointer; }
   .btn:active { transform: scale(.97); }
   .btn.ghost { background: transparent; border: 1.5px solid #38bdf8; color: #38bdf8; font-size: 16px; padding: 12px; }
-  .howto { margin: 18px 0 4px; font-size: 14px; color: #94a3b8; line-height: 1.7; max-width: 320px; }
+  .howto { margin: 18px 0 4px; font-size: 14px; color: #94a3b8; line-height: 1.7; max-width: 330px; }
   .howto b { color: #e8edf5; }
   #count { position: absolute; inset: 0; z-index: 9; display: flex; align-items: center; justify-content: center;
     font-size: 110px; font-weight: 900; color: #fff; text-shadow: 0 0 40px rgba(56,189,248,.8); pointer-events: none; }
@@ -69,6 +72,7 @@
   </div>
   <button id="pauseBtn" aria-label="Pause">&#10074;&#10074;</button>
   <div id="penFlash">+3s CRASH</div>
+  <div id="steerHint">&#9664; drag to steer &#9654;</div>
   <div id="count" class="hidden"></div>
 
   <div id="startScreen" class="overlay">
@@ -80,8 +84,8 @@
     </div>
     <button class="btn" id="playBtn">PLAY</button>
     <button class="btn ghost" id="practiceBtn">Practice run</button>
-    <p class="howto"><b>Hold LEFT / RIGHT side of the screen to steer.</b> Your car accelerates on its own.<br>
-    Same track for everyone today &mdash; it gets meaner the further you go. Green edges are easy, red edges are not.</p>
+    <p class="howto"><b>Touch and DRAG left or right to steer</b> &mdash; like a steering wheel. Your car accelerates on its own.<br>
+    Same track for everyone today &mdash; it gets meaner the further you go, and the final stretch is the nastiest part. Lowest time wins.</p>
   </div>
 
   <div id="resultScreen" class="overlay hidden">
@@ -113,28 +117,40 @@
 /* ---- Seeded PRNG (mulberry32) + string hash (xmur3). No Math.random here: determinism is the point. ---- */
 function xmur3(str){for(var i=0,h=1779033703^str.length;i<str.length;i++){h=Math.imul(h^str.charCodeAt(i),3432918353);h=h<<13|h>>>19;}return function(){h=Math.imul(h^h>>>16,2246822507);h=Math.imul(h^h>>>13,3266489909);return (h^=h>>>16)>>>0;};}
 function mulberry32(a){return function(){var t=a+=0x6D2B79F5;t=Math.imul(t^t>>>15,t|1);t^=t+Math.imul(t^t>>>7,t|61);return ((t^t>>>14)>>>0)/4294967296;};}
+function clamp(v,a,b){return v<a?a:(v>b?b:v);}
+function normAng(a){while(a>Math.PI)a-=2*Math.PI;while(a<-Math.PI)a+=2*Math.PI;return a;}
 
-var SEG_LEN=90, NSEG=70, MAXV=280, ACCEL=260, TURNSPD=2.7;
+var SEG_LEN=90, NSEG=150, SAMPLES=4;
+var MAXV=240, ACCEL=280, TURNSPD=2.9;
+var CAR_HALF_W=18, BOUNCE_KEEP=0.8;
 var ZONE_NAMES=["Easy stretch","Tight turns","Hazard zone"];
 var ZONE_COLORS=["#22c55e","#eab308","#ef4444"];
-function zoneOf(i){return i<23?0:(i<46?1:2);}
+function zoneOf(i){return i<NSEG/3?0:(i<2*NSEG/3?1:2);}
 
-/* ---- Track generation: 70 segments, zones get harder. Fully deterministic from seedStr. ---- */
+function catmull(p0,p1,p2,p3,t){
+  var t2=t*t,t3=t2*t;
+  return 0.5*((2*p1)+(-p0+p2)*t+(2*p0-5*p1+4*p2-p3)*t2+(-p0+3*p1-3*p2+p3)*t3);
+}
+
+/* ---- Track generation: coarse seeded control points -> dense Catmull-Rom centerline.
+        Fully deterministic from seedStr: same seed -> identical track on every device. ---- */
 function generateTrack(seedStr){
   var rng=mulberry32(xmur3(seedStr)());
-  var curvs=[],pts=[];
+  var curvs=[],cx=[],cy=[],cw=[],chd=[];
   var hd=0,target=0;
   for(var i=0;i<NSEG;i++){
     var zone=zoneOf(i);
-    var maxC=[0.035,0.06,0.095][zone];
+    var maxC=[0.04,0.075,0.11][zone];
+    var lateBoost=i>0.75*NSEG?1.2:1.0;
     if(i<3){target=0;}
     else{
       target+=(rng()*2-1)*maxC*0.7;
       target*=0.93;
-      if(zone===2&&(i%7===3)){target=((i%14===3)?1:-1)*maxC*(0.65+rng()*0.35);} /* chicanes late */
+      if(zone===2&&(i%7===3)){target=((i%14===3)?1:-1)*maxC*(0.65+rng()*0.35)*lateBoost;} /* chicanes, nastier late */
       if(hd>1.05)target-=0.025;   /* keep the course from curling into itself */
       if(hd<-1.05)target+=0.025;
-      if(target>maxC)target=maxC; if(target<-maxC)target=-maxC;
+      var cap=maxC*lateBoost;
+      if(target>cap)target=cap; if(target<-cap)target=-cap;
     }
     curvs.push(target); hd+=target;
   }
@@ -144,96 +160,150 @@ function generateTrack(seedStr){
     x+=Math.sin(hd2)*SEG_LEN; y-=Math.cos(hd2)*SEG_LEN;
     var w=150+(95-150)*(j/(NSEG-1))+(rng()*2-1)*8;
     if(w<85)w=85;
-    pts.push({x:x,y:y,w:w,hd:hd2,zone:zoneOf(j)});
+    cx.push(x);cy.push(y);cw.push(w);chd.push(hd2);
   }
+  /* dense smooth centerline: Catmull-Rom through the control points */
+  var pts=[];
+  for(var s=0;s<NSEG-1;s++){
+    var a=Math.max(0,s-1),b=Math.min(NSEG-1,s+2);
+    for(var k=0;k<SAMPLES;k++){
+      var t=k/SAMPLES;
+      var px=catmull(cx[a],cx[s],cx[s+1],cx[b],t);
+      var py=catmull(cy[a],cy[s],cy[s+1],cy[b],t);
+      var pw=catmull(cw[a],cw[s],cw[s+1],cw[b],t);
+      if(pw<80)pw=80;
+      var ph=chd[s]+(chd[s+1]-chd[s])*t;
+      pts.push({x:px,y:py,w:pw,hd:ph,zone:zoneOf(s)});
+    }
+  }
+  pts.push({x:cx[NSEG-1],y:cy[NSEG-1],w:cw[NSEG-1],hd:chd[NSEG-1],zone:zoneOf(NSEG-1)});
+  var NS=pts.length;
+  /* hazards: mild early, nasty cluster in the final ~25% — but always fair:
+     no boost pads in the blocker zone (speed + dense blockers would be unfair),
+     wide minimum gap between blockers so there's room to change sides */
   var oils=[],boosts=[],blockers=[],lastBlockerSeg=-10;
-  for(var k=3;k<NSEG;k++){
-    var z=zoneOf(k),r=rng();
-    if(z>=1&&r<0.22){oils.push({seg:k,lat:(rng()*2-1)*0.55,r:26});}
-    else if(z>=1&&r<0.32){boosts.push({seg:k,lat:(rng()*2-1)*0.5,w:56});}
-    /* min 3-segment gap between blockers: no impossible back-to-back gauntlets */
-    if(z===2&&rng()<0.34&&(k-lastBlockerSeg)>=3){blockers.push({seg:k,freq:0.8+rng()*0.7,phase:rng()*6.283,r:11,side:(rng()<0.5?-1:1)});lastBlockerSeg=k;}
+  for(var m=3;m<NSEG;m++){
+    var z=zoneOf(m),r=rng();
+    var late=m>0.75*NSEG;
+    if(z>=1&&r<(late?0.34:0.16)){oils.push({seg:Math.min(m*SAMPLES,NS-1),lat:(rng()*2-1)*0.55,r:26});}
+    else if(z>=1&&m<=0.7*NSEG&&r<0.26){boosts.push({seg:Math.min(m*SAMPLES,NS-1),lat:(rng()*2-1)*0.5,w:56});}
+    /* blockers live in the final stretch: min 6-segment gap, always leave the far side open */
+    if(m>0.75*NSEG&&rng()<0.38&&(m-lastBlockerSeg)>=6){
+      blockers.push({seg:Math.min(m*SAMPLES,NS-1),freq:0.8+rng()*0.7,phase:rng()*6.283,r:11,side:(rng()<0.5?-1:1)});
+      lastBlockerSeg=m;
+    }
   }
-  return {pts:pts,oils:oils,boosts:boosts,blockers:blockers,checkpoints:[0,10,20,30,40,50,60],finishSeg:NSEG-1};
+  var checkpoints=[];
+  for(var c=0;c<NSEG;c+=10)checkpoints.push(Math.min(c*SAMPLES,NS-1));
+  return {pts:pts,NS:NS,oils:oils,boosts:boosts,blockers:blockers,checkpoints:checkpoints,finishSeg:NS-1};
 }
 
 function ptSegDist(px,py,ax,ay,bx,by){
   var dx=bx-ax,dy=by-ay,L2=dx*dx+dy*dy;
   var t=L2?((px-ax)*dx+(py-ay)*dy)/L2:0;
-  t=t<0?0:(t>1?1:t);
-  var cx=ax+dx*t,cy=ay+dy*t,ddx=px-cx,ddy=py-cy;
-  return {d:Math.sqrt(ddx*ddx+ddy*ddy),cx:cx,cy:cy,t:t};
+  t=clamp(t,0,1);
+  var cxp=ax+dx*t,cyp=ay+dy*t,ddx=px-cxp,ddy=py-cyp;
+  return {d:Math.sqrt(ddx*ddx+ddy*ddy),cx:cxp,cy:cyp,t:t};
 }
+/* nearest point on the smooth centerline; lat = signed lateral offset (+ = right of travel) */
 function queryTrack(tr,px,py,fromSeg){
-  var best=null,hi=Math.min(fromSeg+10,NSEG-1);
-  for(var s=fromSeg;s<=hi;s++){
-    var a=tr.pts[s],b=tr.pts[Math.min(s+1,NSEG-1)];
+  var best=null,lo=Math.max(0,fromSeg-4),hi=Math.min(fromSeg+14,tr.NS-1);
+  for(var s=lo;s<hi;s++){
+    var a=tr.pts[s],b=tr.pts[s+1];
     var q=ptSegDist(px,py,a.x,a.y,b.x,b.y);
-    if(!best||q.d<best.d)best={seg:s,d:q.d,cx:q.cx,cy:q.cy,w:a.w+(b.w-a.w)*q.t,hd:a.hd};
+    if(!best||q.d<best.d){
+      var hd=a.hd+(b.hd-a.hd)*q.t;
+      var nx=Math.cos(hd),ny=Math.sin(hd);
+      best={seg:s,d:q.d,cx:q.cx,cy:q.cy,w:a.w+(b.w-a.w)*q.t,hd:hd,
+            lat:(px-q.cx)*nx+(py-q.cy)*ny};
+    }
   }
   return best;
 }
 function createCar(tr){
   var p=tr.pts[0];
-  return {x:p.x,y:p.y,hd:p.hd,speed:0,seg:0,off:false,oilUntil:-1,boostUntil:-1,
-          invulnUntil:-1,penalty:0,finished:false,crashed:false};
+  return {x:p.x,y:p.y,hd:p.hd,speed:0,seg:0,steerSm:0,oilUntil:-1,boostUntil:-1,
+          invulnUntil:-1,guideUntil:-1,penalty:0,finished:false,crashed:false,bounced:false};
 }
 function blockerPos(tr,b,t){
   var c=tr.pts[b.seg],H=c.w/2;
-  /* guards one side: sweeps [0.36H, 0.48H] on its side — always leaves a wide gap on the far side */
+  /* guards one side: sweeps [0.36H, 0.48H] on its side — far side always passable */
   var off=b.side*(H*0.42+Math.sin(t*b.freq+b.phase)*H*0.06);
-  return {x:c.x+Math.cos(c.hd)*off, y:c.y+Math.sin(c.hd)*off};
+  return {x:c.x+Math.cos(c.hd)*off, y:c.y+Math.sin(c.hd)*off, off:off, H:H};
 }
-/* inp: {steer:-1..1, brake:bool}. t = seconds since GO. */
+/* inp: {steer:-1..1}. t = seconds since GO. */
 function stepCar(tr,car,inp,dt,t){
   if(car.finished)return;
+  /* smooth the steering input so it never snaps */
+  car.steerSm+=(clamp(inp.steer,-1,1)-car.steerSm)*Math.min(1,dt*10);
   var effMax=MAXV;
   if(t<car.oilUntil)effMax*=0.72;
-  if(t<car.boostUntil)effMax=MAXV*1.45;
-  if(inp.brake){car.speed-=520*dt;}
-  else if(car.speed<effMax){car.speed+=ACCEL*dt;if(car.speed>effMax)car.speed=effMax;}
-  else{car.speed-=380*dt;if(car.speed<effMax)car.speed=effMax;}
+  if(t<car.boostUntil)effMax=MAXV*1.4;
+  if(car.speed<effMax){
+    car.speed+=(ACCEL*(1.05-car.speed/effMax))*dt;   /* smooth asymptotic acceleration */
+    if(car.speed>effMax)car.speed=effMax;
+  }
+  if(t<car.boostUntil&&car.speed<effMax){car.speed+=ACCEL*1.5*dt;if(car.speed>effMax)car.speed=effMax;}
   if(car.speed<0)car.speed=0;
   var grip=(t<car.oilUntil)?0.45:1.0;
-  var sf=0.35+0.65*Math.min(car.speed/MAXV,1);
-  car.hd+=inp.steer*TURNSPD*grip*sf*dt;
+  var speedFrac=Math.min(car.speed/MAXV,1);
+  var turnAuth=TURNSPD*(1.2-0.7*speedFrac)*grip;   /* nimble when slow, stable at speed */
+  car.hd+=car.steerSm*turnAuth*dt;
+  if(t<car.oilUntil)car.hd+=Math.sin(t*22+car.x*0.01)*0.55*dt;  /* brief low-grip slide wobble */
   car.x+=Math.sin(car.hd)*car.speed*dt;
   car.y-=Math.cos(car.hd)*car.speed*dt;
   var q=queryTrack(tr,car.x,car.y,car.seg);
   if(q.seg>car.seg)car.seg=q.seg;
-  if(q.d>q.w/2+8){car.speed=Math.max(car.speed-720*dt,50);car.off=true;}
-  else car.off=false;
-  var i,dx,dy;
+  /* ROAD BOUNDARY: the car can never leave the road — bounce off the edge like a bumper wall */
+  var maxLat=q.w/2-CAR_HALF_W-2;
+  if(q.lat>maxLat||q.lat<-maxLat){
+    var sgn=q.lat>0?1:-1;
+    var nx=Math.cos(q.hd),ny=Math.sin(q.hd);
+    car.x=q.cx+nx*sgn*maxLat;
+    car.y=q.cy+ny*sgn*maxLat;
+    /* reflect velocity across the track tangent (vector math, no angle hacks) */
+    var dx=Math.sin(car.hd),dy=-Math.cos(car.hd);
+    var tx=Math.sin(q.hd),ty=-Math.cos(q.hd);
+    var dot=dx*tx+dy*ty;
+    car.hd=Math.atan2(2*dot*tx-dx,-(2*dot*ty-dy));
+    car.speed*=BOUNCE_KEEP;
+    car.bounced=true;
+    car.guideUntil=t+0.4;   /* wall-guide assist: ease heading back to the track direction */
+  }
+  if(t<car.guideUntil){
+    car.hd+=normAng(q.hd-car.hd)*Math.min(1,dt*6);
+  }
+  var i,dx2,dy2;
   if(t>=car.oilUntil){
     for(i=0;i<tr.oils.length;i++){var o=tr.oils[i];
-      if(Math.abs(o.seg-q.seg)<=1){
+      if(Math.abs(o.seg-q.seg)<=SAMPLES){
         var c=tr.pts[o.seg],ox=c.x+Math.cos(c.hd)*o.lat*(c.w/2),oy=c.y+Math.sin(c.hd)*o.lat*(c.w/2);
-        dx=car.x-ox;dy=car.y-oy;
-        if(dx*dx+dy*dy<o.r*o.r){car.oilUntil=t+1.5;break;}
+        dx2=car.x-ox;dy2=car.y-oy;
+        if(dx2*dx2+dy2*dy2<o.r*o.r){car.oilUntil=t+1.5;break;}
       }
     }
   }
   if(t>=car.boostUntil){
     for(i=0;i<tr.boosts.length;i++){var u=tr.boosts[i];
-      if(Math.abs(u.seg-q.seg)<=1){
+      if(Math.abs(u.seg-q.seg)<=SAMPLES){
         var c2=tr.pts[u.seg],bx=c2.x+Math.cos(c2.hd)*u.lat*(c2.w/2),by=c2.y+Math.sin(c2.hd)*u.lat*(c2.w/2);
-        dx=car.x-bx;dy=car.y-by;
+        dx2=car.x-bx;dy2=car.y-by;
         var br=u.w*0.6;
-        if(dx*dx+dy*dy<br*br){car.boostUntil=t+1.2;break;}
+        if(dx2*dx2+dy2*dy2<br*br){car.boostUntil=t+1.2;break;}
       }
     }
   }
   if(t>car.invulnUntil){
     for(i=0;i<tr.blockers.length;i++){var bl=tr.blockers[i];
-      if(Math.abs(bl.seg-q.seg)<=2){
+      if(Math.abs(bl.seg-q.seg)<=2*SAMPLES){
         var bp=blockerPos(tr,bl,t);
-        dx=car.x-bp.x;dy=car.y-bp.y;var rr=bl.r+6;
-        if(dx*dx+dy*dy<rr*rr){
+        dx2=car.x-bp.x;dy2=car.y-bp.y;var rr=bl.r+10;
+        if(dx2*dx2+dy2*dy2<rr*rr){
           var cpSeg=0;
           for(var c3=tr.checkpoints.length-1;c3>=0;c3--){if(tr.checkpoints[c3]<=car.seg){cpSeg=tr.checkpoints[c3];break;}}
           var cp=tr.pts[cpSeg];
-          car.x=cp.x;car.y=cp.y;car.hd=cp.hd;car.speed=90;car.seg=cpSeg;
-          car.penalty+=3;car.invulnUntil=t+2.0;car.oilUntil=-1;car.boostUntil=-1;car.crashed=true;
+          car.x=cp.x;car.y=cp.y;car.hd=cp.hd;car.speed=90;car.seg=cpSeg;car.steerSm=0;
+          car.penalty+=3;car.invulnUntil=t+2.0;car.oilUntil=-1;car.boostUntil=-1;car.guideUntil=-1;car.crashed=true;
           break;
         }
       }
@@ -251,6 +321,7 @@ function stepCar(tr,car,inp,dt,t){
 var canvas=document.getElementById('game'),ctx=canvas.getContext('2d');
 var hud=document.getElementById('hud'),timerEl=document.getElementById('timer'),zoneEl=document.getElementById('zone'),
     pfill=document.getElementById('pfill'),pauseBtn=document.getElementById('pauseBtn'),penFlash=document.getElementById('penFlash'),
+    steerHint=document.getElementById('steerHint'),
     countEl=document.getElementById('count'),startScreen=document.getElementById('startScreen'),resultScreen=document.getElementById('resultScreen'),
     pauseScreen=document.getElementById('pauseScreen');
 
@@ -276,18 +347,18 @@ function shortDate(ds){return new Date(ds+'T12:00:00').toLocaleDateString('en-US
 var state='start';            /* start | countdown | racing | paused | finished */
 var track=null,car=null,raceT=0,practice=false,seedUsed='';
 var cam={x:0,y:0};
-var input={steer:0,brake:false};
+var input={steer:0};
 var keys={l:false,r:false};
-var touches={};               /* pointerId -> 'l'|'r' */
-var penTimer=null;
+var dragId=null,dragStartX=0,dragSteer=0;
+var DRAG_RANGE=130;           /* px of horizontal drag = full steering lock */
+var penTimer=null,hintTimer=null;
 
 function newTrack(seed){track=generateTrack(seed);car=createCar(track);cam.x=car.x;cam.y=car.y;raceT=0;}
 
-/* ---------- input ---------- */
+/* ---------- input: drag-to-steer (touch + mouse), arrows/AD on desktop ---------- */
 function refreshSteer(){
-  var s=(keys.r?1:0)-(keys.l?1:0);
-  for(var id in touches){s+=(touches[id]==='r'?1:-1);}
-  input.steer=Math.max(-1,Math.min(1,s));
+  var keyS=(keys.r?1:0)-(keys.l?1:0);
+  input.steer=dragId!==null?dragSteer:keyS;
 }
 window.addEventListener('keydown',function(e){
   if(e.key==='ArrowLeft'||e.key==='a'||e.key==='A'){keys.l=true;refreshSteer();e.preventDefault();}
@@ -300,12 +371,22 @@ window.addEventListener('keyup',function(e){
 });
 canvas.addEventListener('pointerdown',function(e){
   if(state!=='racing')return;
-  touches[e.pointerId]=e.clientX<window.innerWidth/2?'l':'r';
-  refreshSteer();e.preventDefault();
+  if(dragId===null){
+    dragId=e.pointerId;dragStartX=e.clientX;dragSteer=0;
+    try{canvas.setPointerCapture(e.pointerId);}catch(err){}
+    refreshSteer();
+  }
+  e.preventDefault();
 });
-function ptrEnd(e){if(touches[e.pointerId]!==undefined){delete touches[e.pointerId];refreshSteer();}}
-canvas.addEventListener('pointerup',ptrEnd);
-canvas.addEventListener('pointercancel',ptrEnd);
+canvas.addEventListener('pointermove',function(e){
+  if(e.pointerId!==dragId||state!=='racing')return;
+  dragSteer=clamp((e.clientX-dragStartX)/DRAG_RANGE,-1,1);
+  refreshSteer();
+  e.preventDefault();
+});
+function endDrag(e){if(e.pointerId===dragId){dragId=null;dragSteer=0;refreshSteer();}}
+canvas.addEventListener('pointerup',endDrag);
+canvas.addEventListener('pointercancel',endDrag);
 canvas.addEventListener('contextmenu',function(e){e.preventDefault();});
 
 /* ---------- flow ---------- */
@@ -326,6 +407,7 @@ function startRace(isPractice){
   newTrack(seedUsed);
   startScreen.classList.add('hidden');resultScreen.classList.add('hidden');
   hud.classList.remove('hidden');pauseBtn.style.display='block';
+  steerHint.style.opacity='1';
   state='countdown';
   var seq=['3','2','1','GO!'],i=0;
   countEl.classList.remove('hidden');
@@ -334,13 +416,19 @@ function startRace(isPractice){
     countEl.textContent=seq[i];
     countEl.style.color=i===3?'#22c55e':'#fff';
     if(++i<seq.length){setTimeout(tick,750);}
-    else{setTimeout(function(){if(state!=='countdown')return;countEl.classList.add('hidden');state='racing';},700);}
+    else{setTimeout(function(){
+      if(state!=='countdown')return;
+      countEl.classList.add('hidden');state='racing';
+      if(hintTimer)clearTimeout(hintTimer);
+      hintTimer=setTimeout(function(){steerHint.style.opacity='0';},3500);
+    },700);}
   }
   tick();
 }
 function finishRace(){
   state='finished';
   pauseBtn.style.display='none';
+  steerHint.style.opacity='0';
   var totalMs=(raceT+car.penalty)*1000;
   var ds=dateStr(),s=load(),isBest=false;
   if(!practice){
@@ -366,15 +454,57 @@ function flashPenalty(){
 }
 
 /* ---------- rendering ---------- */
+function rr(x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);
+  ctx.closePath();
+}
 function inView(x,y,vx0,vy0,vx1,vy1){return x>vx0&&x<vx1&&y>vy0&&y<vy1;}
 function drawChecker(cx,cy,hd,w){
-  var px=Math.cos(hd),py=Math.sin(hd);
   var rows=2,cols=8,sqw=w/cols,sqh=14;
   ctx.save();ctx.translate(cx,cy);ctx.rotate(-hd);
   for(var r2=0;r2<rows;r2++)for(var c=0;c<cols;c++){
     ctx.fillStyle=((r2+c)%2===0)?'#e8edf5':'#0b0e14';
     ctx.fillRect(-w/2+c*sqw,-sqh+r2*sqh,sqw,sqh);
   }
+  ctx.restore();
+}
+function drawWheel(x,y,ang){
+  ctx.save();ctx.translate(x,y);ctx.rotate(ang);
+  ctx.fillStyle='#05070c';rr(-4.5,-8,9,16,3);ctx.fill();
+  ctx.fillStyle='#3b4a61';ctx.fillRect(-2,-5,4,10);
+  ctx.restore();
+}
+function drawCar(){
+  ctx.save();ctx.translate(car.x,car.y);ctx.rotate(-car.hd);
+  var st=car.steerSm||0;
+  /* soft shadow */
+  ctx.fillStyle='rgba(0,0,0,0.35)';
+  ctx.beginPath();ctx.ellipse(3,5,17,25,0,0,6.283);ctx.fill();
+  /* wheels: 4 visible, front pair angles with steering */
+  drawWheel(-13.5,-13,st*0.45);drawWheel(13.5,-13,st*0.45);
+  drawWheel(-13.5,13,0);drawWheel(13.5,13,0);
+  /* body */
+  var g=ctx.createLinearGradient(-11,0,11,0);
+  g.addColorStop(0,'#0284c9');g.addColorStop(0.5,'#38bdf8');g.addColorStop(1,'#0ea5e9');
+  ctx.fillStyle=g;rr(-11,-20,22,40,8);ctx.fill();
+  ctx.strokeStyle='rgba(2,20,35,0.6)';ctx.lineWidth=1.5;rr(-11,-20,22,40,8);ctx.stroke();
+  /* racing stripe */
+  ctx.fillStyle='#f1f5f9';ctx.fillRect(-3.2,-20,6.4,40);
+  ctx.fillStyle='#0ea5e9';ctx.fillRect(-1.2,-20,2.4,40);
+  /* windshield + cockpit + helmet */
+  ctx.fillStyle='rgba(170,215,250,0.9)';
+  ctx.beginPath();ctx.moveTo(-6.5,-6);ctx.lineTo(6.5,-6);ctx.lineTo(4,-14);ctx.lineTo(-4,-14);ctx.closePath();ctx.fill();
+  ctx.fillStyle='#0b1c2c';rr(-6.5,-4,13,11,4);ctx.fill();
+  ctx.fillStyle='#fbbf24';ctx.beginPath();ctx.arc(0,1.5,4.2,0,6.283);ctx.fill();
+  ctx.fillStyle='#0b1c2c';ctx.fillRect(-4.2,0.2,8.4,2.2);
+  /* nose headlights */
+  ctx.fillStyle='#e0f2fe';ctx.fillRect(-8.5,-20,4,3);ctx.fillRect(4.5,-20,4,3);
+  /* rear spoiler + taillights */
+  ctx.fillStyle='#0c4a6e';rr(-13,15,26,5.5,2);ctx.fill();
+  ctx.fillStyle='#ef4444';ctx.fillRect(-9.5,16,5,2.5);ctx.fillRect(4.5,16,5,2.5);
   ctx.restore();
 }
 function render(t){
@@ -385,40 +515,52 @@ function render(t){
   var look=0.22;
   var tx=car.x+Math.sin(car.hd)*car.speed*look, ty=car.y-Math.cos(car.hd)*car.speed*look;
   cam.x+=(tx-cam.x)*0.14; cam.y+=(ty-cam.y)*0.14;
-  var shx=0,shy=0;
-  if(car.off&&state==='racing'){shx=Math.sin(t*70)*6;shy=Math.cos(t*63)*6;}
   ctx.translate(cssW/2,cssH*0.60);
   ctx.scale(scale,scale);
-  ctx.translate(-cam.x+shx,-cam.y+shy);
+  ctx.translate(-cam.x,-cam.y);
   var vw=cssW/scale,vh=cssH/scale;
-  var vx0=cam.x-vw/2-120,vx1=cam.x+vw/2+120,vy0=cam.y-vh/2-120,vy1=cam.y+vh/2+120;
-  var pts=track.pts,i;
-  /* road base */
-  ctx.lineCap='round';ctx.lineJoin='round';
-  for(i=0;i<NSEG-1;i++){
-    var a=pts[i],b=pts[i+1];
-    if(!inView(a.x,a.y,vx0,vy0,vx1,vy1)&&!inView(b.x,b.y,vx0,vy0,vx1,vy1))continue;
-    ctx.strokeStyle='#232c3a';ctx.lineWidth=a.w;
-    ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();
+  var vx0=cam.x-vw/2-140,vx1=cam.x+vw/2+140,vy0=cam.y-vh/2-140,vy1=cam.y+vh/2+140;
+  var pts=track.pts,NS=track.NS,i;
+  /* road base: one clean filled polygon from the smooth centerline */
+  ctx.beginPath();
+  var started=false;
+  for(i=0;i<NS;i++){
+    var p=pts[i],ex=Math.cos(p.hd),ey=Math.sin(p.hd);
+    var lx=p.x+ex*p.w/2,ly=p.y+ey*p.w/2;
+    if(!started){ctx.moveTo(lx,ly);started=true;}else ctx.lineTo(lx,ly);
   }
-  /* edge stripes, colored by zone */
-  for(i=0;i<NSEG-1;i++){
-    var p=pts[i],q2=pts[i+1];
-    if(!inView(p.x,p.y,vx0,vy0,vx1,vy1)&&!inView(q2.x,q2.y,vx0,vy0,vx1,vy1))continue;
-    var ex=Math.cos(p.hd),ey=Math.sin(p.hd);
-    ctx.strokeStyle=ZONE_COLORS[p.zone];ctx.lineWidth=5;
-    ctx.beginPath();
-    ctx.moveTo(p.x+ex*p.w/2,p.y+ey*p.w/2);ctx.lineTo(q2.x+Math.cos(q2.hd)*q2.w/2,q2.y+Math.sin(q2.hd)*q2.w/2);
-    ctx.moveTo(p.x-ex*p.w/2,p.y-ey*p.w/2);ctx.lineTo(q2.x-Math.cos(q2.hd)*q2.w/2,q2.y-Math.sin(q2.hd)*q2.w/2);
-    ctx.stroke();
+  for(i=NS-1;i>=0;i--){
+    var q=pts[i],fx=Math.cos(q.hd),fy=Math.sin(q.hd);
+    ctx.lineTo(q.x-fx*q.w/2,q.y-fy*q.w/2);
+  }
+  ctx.closePath();
+  ctx.fillStyle='#232c3a';ctx.fill();
+  /* edge stripes: clean continuous lines, colored by zone */
+  ctx.lineWidth=5;ctx.lineCap='round';ctx.lineJoin='round';
+  var runS=0;
+  for(i=1;i<=NS;i++){
+    if(i===NS||pts[i].zone!==pts[runS].zone){
+      ctx.strokeStyle=ZONE_COLORS[pts[runS].zone];
+      for(var side=0;side<2;side++){
+        var sgn=side===0?1:-1;
+        ctx.beginPath();
+        for(var j=runS;j<i;j++){
+          var r=pts[j],rx2=Math.cos(r.hd),ry2=Math.sin(r.hd);
+          var exx=r.x+sgn*rx2*r.w/2,eyy=r.y+sgn*ry2*r.w/2;
+          if(j===runS)ctx.moveTo(exx,eyy);else ctx.lineTo(exx,eyy);
+        }
+        ctx.stroke();
+      }
+      runS=i;
+    }
   }
   /* center dashes */
   ctx.strokeStyle='rgba(255,255,255,0.16)';ctx.lineWidth=3;ctx.setLineDash([16,20]);
   ctx.beginPath();ctx.moveTo(pts[0].x,pts[0].y);
-  for(i=1;i<NSEG;i++)ctx.lineTo(pts[i].x,pts[i].y);
+  for(i=1;i<NS;i++)ctx.lineTo(pts[i].x,pts[i].y);
   ctx.stroke();ctx.setLineDash([]);
-  /* start + finish */
-  var s0=pts[0],sf=pts[NSEG-1];
+  /* start + finish checkers */
+  var s0=pts[0],sf=pts[NS-1];
   if(inView(s0.x,s0.y,vx0,vy0,vx1,vy1))drawChecker(s0.x,s0.y,s0.hd,s0.w);
   if(inView(sf.x,sf.y,vx0,vy0,vx1,vy1))drawChecker(sf.x,sf.y,sf.hd,sf.w);
   /* hazards */
@@ -444,30 +586,14 @@ function render(t){
     var bp=blockerPos(track,bl,t);
     if(!inView(bp.x,bp.y,vx0,vy0,vx1,vy1))continue;
     var pr=bl.r+3*Math.sin(t*7+bl.phase);
-    var g=ctx.createRadialGradient(bp.x,bp.y,2,bp.x,bp.y,pr+10);
-    g.addColorStop(0,'#ef4444');g.addColorStop(1,'rgba(239,68,68,0)');
-    ctx.fillStyle=g;ctx.beginPath();ctx.arc(bp.x,bp.y,pr+10,0,6.283);ctx.fill();
+    var gg=ctx.createRadialGradient(bp.x,bp.y,2,bp.x,bp.y,pr+10);
+    gg.addColorStop(0,'#ef4444');gg.addColorStop(1,'rgba(239,68,68,0)');
+    ctx.fillStyle=gg;ctx.beginPath();ctx.arc(bp.x,bp.y,pr+10,0,6.283);ctx.fill();
     ctx.fillStyle='#b91c1c';ctx.beginPath();ctx.arc(bp.x,bp.y,pr,0,6.283);ctx.fill();
     ctx.fillStyle='#ef4444';ctx.beginPath();ctx.arc(bp.x,bp.y,pr*0.55,0,6.283);ctx.fill();
   }
-  /* car */
-  ctx.save();ctx.translate(car.x,car.y);ctx.rotate(-car.hd);
-  var wob2=(car.off&&state==='racing')?Math.sin(t*60)*1.5:0;
-  ctx.translate(wob2,0);
-  ctx.shadowColor='#38bdf8';ctx.shadowBlur=18;
-  ctx.fillStyle='#38bdf8';
-  ctx.beginPath();
-  if(ctx.roundRect)ctx.roundRect(-17,-10,34,20,7);else ctx.rect(-17,-10,34,20);
-  ctx.fill();
-  ctx.shadowBlur=0;
-  ctx.fillStyle='#0b1c2c';
-  ctx.beginPath();
-  if(ctx.roundRect)ctx.roundRect(-4,-7,12,14,4);else ctx.rect(-4,-7,12,14);
-  ctx.fill();
-  ctx.fillStyle='rgba(255,255,255,0.85)';ctx.fillRect(12,-8,3,16);
-  ctx.restore();
+  drawCar();
 }
-function fmtHud(ms){return fmt(ms);}
 
 /* ---------- main loop ---------- */
 var lastTs=0;
@@ -480,10 +606,10 @@ function loop(ts){
     stepCar(track,car,input,dt,raceT);
     if(car.crashed){car.crashed=false;flashPenalty();}
     var totalMs=(raceT+car.penalty)*1000;
-    timerEl.textContent=fmtHud(totalMs);
+    timerEl.textContent=fmt(totalMs);
     var pct=Math.round(100*car.seg/track.finishSeg);
     pfill.style.width=pct+'%';
-    var z=zoneOf(car.seg);
+    var z=track.pts[Math.min(car.seg,track.NS-1)].zone;
     zoneEl.textContent=ZONE_NAMES[z]+'  \u00B7  '+pct+'%';
     zoneEl.className='z'+(z+1);
     if(car.finished)finishRace();
