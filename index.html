@@ -3,7 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-<meta name="theme-color" content="#0b0e14">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Daily Race">
+<meta name="theme-color" content="#c62f2f">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="../../icons/race-180.png">
 <title>Daily Race</title>
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -69,6 +75,25 @@
   .row .btn { width: 150px; font-size: 16px; padding: 13px; margin: 10px 0 0; }
   #shareMsg { margin-top: 10px; font-size: 13px; color: #22c55e; min-height: 18px; }
   .flag { font-size: 12px; letter-spacing: 3px; text-transform: uppercase; color: #f59e0b; margin-top: 6px; }
+  /* ---------- results / leaderboard ---------- */
+  #resTier { font-size: 32px; font-weight: 900; letter-spacing: 4px; margin-top: 10px; }
+  #resRank { font-size: 14px; color: #94a3b8; margin-top: 6px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .tier-POLE{color:#fbbf24;text-shadow:0 0 18px rgba(251,191,36,.5);}
+  .tier-FROW{color:#e2e8f0;text-shadow:0 0 14px rgba(226,232,240,.4);}
+  .tier-PODIUM{color:#fb923c;} .tier-POINTS{color:#4ade80;}
+  .tier-MIDFIELD{color:#7dd3fc;} .tier-BACKMARKER{color:#94a3b8;} .tier-PITLANE{color:#ef4444;}
+  .lbList { width: 310px; max-height: 215px; overflow-y: auto; margin: 8px auto 0; text-align: left;
+    background: #0d1524; border: 1px solid #1f2b40; border-radius: 12px; padding: 8px 12px; }
+  .lbRow { display: flex; justify-content: space-between; gap: 8px; padding: 6px 2px; font-size: 13px;
+    border-bottom: 1px solid #16202f; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .lbRow.me { color: #7dd3fc; font-weight: 800; }
+  .lbRow:last-child { border-bottom: none; }
+  .secTitle { font-size: 12px; letter-spacing: 2px; text-transform: uppercase; color: #64748b; margin: 14px 0 2px; }
+  #nameInput, #phraseInput { width: 250px; padding: 14px; font-size: 18px; border-radius: 12px;
+    border: 1.5px solid #38bdf8; background: #0d1524; color: #e8edf5; text-align: center; margin-top: 12px; }
+  #nameMsg { min-height: 20px; font-size: 13px; color: #f59e0b; margin-top: 10px; max-width: 300px; }
+  .tiny { font-size: 12px; color: #64748b; margin-top: 10px; max-width: 300px; line-height: 1.6; }
+  .linkBtn { background: none; border: none; color: #38bdf8; font-size: 13px; margin-top: 10px; cursor: pointer; text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -96,14 +121,18 @@
     </div>
     <button class="btn" id="playBtn">PLAY</button>
     <button class="btn ghost" id="practiceBtn">Practice run</button>
+    <button class="btn ghost" id="resultsBtn">Results</button>
+    <button class="linkBtn" id="nameBtn">driver: not set</button>
     <p class="howto"><b>Hold the LEFT or RIGHT side of the screen to steer</b> &mdash; your car accelerates on its own and always points up.<br>
-    4 lanes narrow down to 2 &mdash; overtake the slower traffic. Barriers just pop you in the air, oil sends you spinning. Lowest time wins.</p>
+    4 lanes narrow down to 2 &mdash; overtake the slower traffic. Barriers pop you up and stall you, oil spins you out and slows you down. Lowest time wins.</p>
   </div>
 
   <div id="resultScreen" class="overlay hidden">
     <h1 class="title" id="resTitle">FINISH!</h1>
     <div class="flag hidden" id="practiceFlag">Practice &mdash; not counted</div>
     <p class="subtitle" id="resTime" style="font-size:34px;font-weight:800;color:#fff;font-family:ui-monospace,Menlo,Consolas,monospace;"></p>
+    <div id="resTier"></div>
+    <div id="resRank"></div>
     <div id="newBest" class="hidden">&#9733; New best today &#9733;</div>
     <div class="stats">
       <div class="stat"><div class="k">Best today</div><div class="v" id="resBest">--</div></div>
@@ -115,6 +144,29 @@
       <button class="btn ghost" id="againBtn">Race again</button>
       <button class="btn ghost" id="homeBtn">Home</button>
     </div>
+  </div>
+
+  <div id="nameScreen" class="overlay hidden">
+    <h1 class="title" style="font-size:34px;">DRIVER NAME</h1>
+    <p class="subtitle" id="nameSub">Claim a name for the daily leaderboard.</p>
+    <input id="nameInput" maxlength="16" placeholder="your driver name" autocomplete="off">
+    <div id="phraseWrap" class="hidden">
+      <input id="phraseInput" type="password" placeholder="password phrase (min 4 chars)" autocomplete="off">
+      <p class="tiny">Don&rsquo;t lose your phrase &mdash; there&rsquo;s no reset. It&rsquo;s stored as a hash, never plain text.</p>
+    </div>
+    <div id="nameMsg"></div>
+    <button class="btn" id="nameGo">CHECK NAME</button>
+    <button class="linkBtn" id="nameCancel">cancel</button>
+  </div>
+
+  <div id="resultsScreen" class="overlay hidden">
+    <h1 class="title" style="font-size:34px;">RESULTS</h1>
+    <div class="secTitle" id="lbTitle">Today&rsquo;s leaderboard</div>
+    <div class="lbList" id="lbList"><div class="lbRow"><span>loading&hellip;</span><span></span><span></span></div></div>
+    <div class="secTitle">Your history</div>
+    <div class="lbList" id="histList"></div>
+    <button class="btn ghost" id="resultsClose" style="margin-top:14px;">Close</button>
+    <button class="linkBtn" id="logoutBtn">switch driver name</button>
   </div>
 
   <div id="pauseScreen" class="overlay hidden">
@@ -133,10 +185,13 @@ function clamp(v,a,b){return v<a?a:(v>b?b:v);}
 function normAng(a){while(a>Math.PI)a-=2*Math.PI;while(a<-Math.PI)a+=2*Math.PI;return a;}
 
 var SEG_LEN=90, NSEG=150, SAMPLES=4;
-var MAXV=320, ACCEL=400, TURNSPD=3.1;
+var MAXV=336, ACCEL=420, TURNSPD=3.1;   /* v5: +5% top speed */
 var CAR_HALF_W=18, BOUNCE_KEEP=0.8;
 var LANE_W=58;                        /* road width = lane count x lane width */
-var AIR_DUR=0.65, SPIN_DUR=0.6;        /* bomb pop / oil spin durations */
+var AIR_DUR=0.8, SPIN_DUR=0.6;        /* bomb pop / oil spin durations */
+var SLOW_DUR=1.5, STALL_DUR=1.5;       /* oil slow + bomb stall, seconds */
+var GAP_CARW=1.0;                     /* blocker-row gap width in car widths (Monte-Carlo tuned for ≤18% clean-pass) */
+var TRAFFIC_WOB=6;                    /* traffic wobble amplitude — always stays inside its lane */
 function lanesOfZone(z){return [4,3,2][z];}   /* 4 lanes early -> 3 -> 2 at the end */
 var ZONE_NAMES=["Easy stretch","Tight turns","Hazard zone"];
 var ZONE_COLORS=["#22c55e","#eab308","#ef4444"];
@@ -201,9 +256,13 @@ function generateTrack(seedStr){
     var late=m>0.75*NSEG;
     if(z>=1&&r<(late?0.34:0.16)){oils.push({seg:Math.min(m*SAMPLES,NS-1),lat:(rng()*2-1)*0.55,r:26});}
     else if(z>=1&&m<=0.7*NSEG&&r<0.26){boosts.push({seg:Math.min(m*SAMPLES,NS-1),lat:(rng()*2-1)*0.5,w:56});}
-    /* blockers live in the final stretch: min 6-segment gap, always leave the far side open */
+    /* blocker ROWS live in the final stretch: every row spans the full road width except
+       one narrow gap (GAP_CARW car-widths) at a random lateral spot. Min 6-seg row spacing. */
     if(m>0.75*NSEG&&rng()<0.38&&(m-lastBlockerSeg)>=6){
-      blockers.push({seg:Math.min(m*SAMPLES,NS-1),freq:0.8+rng()*0.7,phase:rng()*6.283,r:11,side:(rng()<0.5?-1:1)});
+      var nl2=lanesOfZone(zoneOf(m)),halfR=nl2*LANE_W/2;
+      var gh2=(CAR_HALF_W*2*GAP_CARW)/2;
+      var gmax=halfR-gh2-8;   /* margin absorbs the smoothed width noise so the gap is always fully on-road */
+      blockers.push({seg:Math.min(m*SAMPLES,NS-1),gap:(rng()*2-1)*gmax,gh:gh2,row:true});
       lastBlockerSeg=m;
     }
   }
@@ -258,27 +317,45 @@ function createCar(tr){
   var p=tr.pts[0];
   return {x:p.x,y:p.y,hd:p.hd,speed:0,seg:0,steerSm:0,boostUntil:-1,oilCd:-1,
           invulnUntil:-1,guideUntil:-1,airUntil:-1,spinUntil:-1,
+          slowUntil:-1,slowCut:true,stallUntil:-1,
+          stats:{pops:0,spins:0,overtakes:0},
           finished:false,popped:false,bounced:false};
 }
-function blockerPos(tr,b,t){
+/* blocker row geometry: two striped barriers flanking the gap.
+   Returns the two barrier spans {x,y,hd,len} for rendering. */
+function rowBarriers(tr,b){
   var c=tr.pts[b.seg],H=c.w/2;
-  /* guards one side: sweeps [0.36H, 0.48H] on its side — far side always passable */
-  var off=b.side*(H*0.42+Math.sin(t*b.freq+b.phase)*H*0.06);
-  return {x:c.x+Math.cos(c.hd)*off, y:c.y+Math.sin(c.hd)*off, off:off, H:H};
+  var ex=Math.cos(c.hd),ey=Math.sin(c.hd);
+  function span(a0,a1){
+    var mid=(a0+a1)/2;
+    return {x:c.x+ex*mid,y:c.y+ey*mid,hd:c.hd,len:Math.max(0,a1-a0)};
+  }
+  return [span(-H,b.gap-b.gh),span(b.gap+b.gh,H)];
 }
-/* bomb pop: the car pops into the air, keeps its momentum, lands and keeps going —
-   no restart, no time penalty. Airborne + brief grace after landing = no chain-hits. */
-function popBomb(car,t){
+/* true when a car at lateral offset lat clips the row (must thread the gap) */
+function rowHit(b,lat){
+  return Math.abs(lat-b.gap)>b.gh-CAR_HALF_W*0.55;
+}
+/* bomb pop: the car pops into the air and STALLS — dead stop for STALL_DUR,
+   then it accelerates back up. No restart, no added time penalty.
+   Invulnerability covers the whole stall so there's no chain-hitting. */
+function popBomb(car,t,hd){
   car.airUntil=t+AIR_DUR;
-  car.invulnUntil=t+AIR_DUR+0.5;
+  car.stallUntil=t+STALL_DUR;
+  car.invulnUntil=t+STALL_DUR+0.5;
   car.oilCd=Math.max(car.oilCd,t+1.2);
+  car.speed=0;
   car.popped=true;
-  car.x-=Math.sin(car.hd)*24;   /* nudge back so it doesn't land inside the same hazard */
-  car.y+=Math.cos(car.hd)*24;
+  car.stats.pops++;
+  /* nudge back along the track tangent (not car heading) so lateral position —
+     and wall containment — is preserved */
+  var th=(hd===undefined)?car.hd:hd;
+  car.x-=Math.sin(th)*24;
+  car.y+=Math.cos(th)*24;
 }
 function trafficXY(tr,tc,t){
   var s=clamp(Math.floor(tc.seg),0,tr.NS-1),p=tr.pts[s];
-  var off=tc.off+Math.sin(t*0.9+tc.wob)*6;   /* slight natural wobble in the lane */
+  var off=tc.off+Math.sin(t*0.9+tc.wob)*TRAFFIC_WOB;   /* slight wobble — never leaves its lane */
   return {x:p.x+Math.cos(p.hd)*off,y:p.y+Math.sin(p.hd)*off,hd:p.hd};
 }
 function stepTraffic(tr,car,dt,t){
@@ -286,10 +363,11 @@ function stepTraffic(tr,car,dt,t){
     var tc=tr.traffic[i];
     if(tc.done)continue;
     tc.seg+=tc.speed*dt/(SEG_LEN/SAMPLES);
+    if(!tc.counted&&tc.seg<car.seg-8){tc.counted=true;car.stats.overtakes++;}
     if(tc.seg>=tr.NS-2||tc.seg<car.seg-60){tc.done=true;continue;}
     if(t>car.invulnUntil&&t>=car.airUntil){
       var q=trafficXY(tr,tc,t),dx=car.x-q.x,dy=car.y-q.y;
-      if(dx*dx+dy*dy<30*30)popBomb(car,t);
+      if(dx*dx+dy*dy<30*30)popBomb(car,t,q.hd);
     }
   }
 }
@@ -298,22 +376,31 @@ function stepCar(tr,car,inp,dt,t){
   if(car.finished)return;
   /* smooth the steering input so it never snaps */
   /* no steering while airborne (bomb pop) or spinning (oil) */
-  var steerIn=(t<car.airUntil||t<car.spinUntil)?0:clamp(inp.steer,-1,1);
+  var steerIn=(t<car.airUntil||t<car.spinUntil||t<car.stallUntil)?0:clamp(inp.steer,-1,1);
   car.steerSm+=(steerIn-car.steerSm)*Math.min(1,dt*10);
   var effMax=MAXV;
   if(t<car.boostUntil)effMax=MAXV*1.4;
-  if(car.speed<effMax){
-    car.speed+=(ACCEL*(1.05-car.speed/effMax))*dt;   /* smooth asymptotic acceleration */
+  if(t>=car.spinUntil&&t<car.slowUntil)effMax=Math.min(effMax,MAXV*0.95);  /* oil slow: -5% for 1.5s */
+  if(t<car.stallUntil){
+    car.speed=0;   /* bomb stall: dead stop, then it accelerates back up */
+  }else{
+    if(car.speed<effMax){
+      car.speed+=(ACCEL*(1.05-car.speed/effMax))*dt;   /* smooth asymptotic acceleration */
+      if(car.speed>effMax)car.speed=effMax;
+    }
+    if(t<car.boostUntil&&car.speed<effMax){car.speed+=ACCEL*1.5*dt;if(car.speed>effMax)car.speed=effMax;}
     if(car.speed>effMax)car.speed=effMax;
   }
-  if(t<car.boostUntil&&car.speed<effMax){car.speed+=ACCEL*1.5*dt;if(car.speed>effMax)car.speed=effMax;}
   if(car.speed<0)car.speed=0;
+  /* the 5% cut lands the moment the spin ends */
+  if(!car.slowCut&&t>=car.spinUntil&&t<car.slowUntil){car.speed*=0.95;car.slowCut=true;}
   var speedFrac=Math.min(car.speed/MAXV,1);
   var turnAuth=TURNSPD*(1.2-0.7*speedFrac);   /* nimble when slow, stable at speed */
   car.hd+=car.steerSm*turnAuth*dt;
   car.x+=Math.sin(car.hd)*car.speed*dt;
   car.y-=Math.cos(car.hd)*car.speed*dt;
   var q=queryTrack(tr,car.x,car.y,car.seg);
+  var prevSeg=car.seg;
   if(q.seg>car.seg)car.seg=q.seg;
   /* ROAD BOUNDARY: the car can never leave the road — bounce off the edge like a bumper wall */
   var maxLat=q.w/2-CAR_HALF_W-2;
@@ -341,7 +428,14 @@ function stepCar(tr,car,inp,dt,t){
       if(Math.abs(o.seg-q.seg)<=SAMPLES){
         var c=tr.pts[o.seg],ox=c.x+Math.cos(c.hd)*o.lat*(c.w/2),oy=c.y+Math.sin(c.hd)*o.lat*(c.w/2);
         dx2=car.x-ox;dy2=car.y-oy;
-        if(dx2*dx2+dy2*dy2<o.r*o.r){car.spinUntil=t+SPIN_DUR;car.oilCd=t+1.5;break;}
+        if(dx2*dx2+dy2*dy2<o.r*o.r){
+          car.spinUntil=t+SPIN_DUR;
+          car.slowUntil=t+SPIN_DUR+SLOW_DUR;   /* -5% speed for 1.5s once the spin ends */
+          car.slowCut=false;
+          car.oilCd=t+1.5;
+          car.stats.spins++;
+          break;
+        }
       }
     }
   }
@@ -355,13 +449,12 @@ function stepCar(tr,car,inp,dt,t){
       }
     }
   }
-  /* blockers: bomb pop — car pops up, keeps momentum, lands and keeps going */
+  /* blocker rows: judged at the exact moment you cross the barrier line —
+     thread the gap or eat a bomb pop (stall, then recover) */
   if(t>car.invulnUntil&&t>=car.airUntil){
     for(i=0;i<tr.blockers.length;i++){var bl=tr.blockers[i];
-      if(Math.abs(bl.seg-q.seg)<=2*SAMPLES){
-        var bp=blockerPos(tr,bl,t);
-        dx2=car.x-bp.x;dy2=car.y-bp.y;var brad=bl.r+10;
-        if(dx2*dx2+dy2*dy2<brad*brad){popBomb(car,t);break;}
+      if(prevSeg<bl.seg&&q.seg>=bl.seg){
+        if(rowHit(bl,q.lat)){popBomb(car,t,q.hd);break;}
       }
     }
   }
@@ -371,16 +464,60 @@ function stepCar(tr,car,inp,dt,t){
   var fdx=fp1.x-fp0.x,fdy=fp1.y-fp0.y,fl=Math.sqrt(fdx*fdx+fdy*fdy)||1;
   if(((car.x-fp0.x)*fdx+(car.y-fp0.y)*fdy)/fl>=fl-8)car.finished=true;
 }
+/* ---- F1-style result tiers ---- */
+var TIERS=['POLE','FRONT ROW','PODIUM','POINTS','MIDFIELD','BACKMARKER','PIT LANE'];
+/* leaderboard mode: rank vs everyone today.
+   b = fraction of the field you beat. */
+function tierForRank(rank,total){
+  if(rank<=1)return'POLE';
+  if(rank<=2)return'FRONT ROW';
+  var b=(total-rank)/total;
+  if(b>=0.90)return'PODIUM';
+  if(b>=0.75)return'POINTS';
+  if(b>=0.50)return'MIDFIELD';
+  if(b>=0.10)return'BACKMARKER';
+  return'PIT LANE';
+}
+/* local-only fallback: POLE = new personal best, FRONT ROW = within 2% of best,
+   then by fraction of your own runs beaten (times includes this run, ms) */
+function tierForPersonal(ms,times){
+  if(!times||!times.length)return'POLE';
+  var s=times.slice().sort(function(a,b){return a-b;});
+  if(ms<=s[0])return'POLE';
+  if(ms<=s[0]*1.02)return'FRONT ROW';
+  var beaten=0;
+  for(var i=0;i<s.length;i++)if(s[i]>ms)beaten++;
+  var b=beaten/s.length;
+  if(b>=0.90)return'PODIUM';
+  if(b>=0.75)return'POINTS';
+  if(b>=0.50)return'MIDFIELD';
+  if(b>=0.10)return'BACKMARKER';
+  return'PIT LANE';
+}
 /*__CORE_END__*/
 /* ================= APP ================= */
 (function(){
 'use strict';
+/* ---------- shared leaderboard (Google Apps Script + Sheet) ----------
+   Paste your Apps Script web-app URL below to enable the daily leaderboard.
+   Leave empty for local-only mode (personal-history tiers, no sharing). */
+var LEADERBOARD_URL='';
+var GAME_ID='daily-race';
 var canvas=document.getElementById('game'),ctx=canvas.getContext('2d');
 var hud=document.getElementById('hud'),timerEl=document.getElementById('timer'),zoneEl=document.getElementById('zone'),
     pfill=document.getElementById('pfill'),pauseBtn=document.getElementById('pauseBtn'),penFlash=document.getElementById('penFlash'),
     steerHint=document.getElementById('steerHint'),touchL=document.getElementById('touchL'),touchR=document.getElementById('touchR'),
     countEl=document.getElementById('count'),startScreen=document.getElementById('startScreen'),resultScreen=document.getElementById('resultScreen'),
-    pauseScreen=document.getElementById('pauseScreen');
+    pauseScreen=document.getElementById('pauseScreen'),
+    resTier=document.getElementById('resTier'),resRank=document.getElementById('resRank'),
+    nameScreen=document.getElementById('nameScreen'),nameInput=document.getElementById('nameInput'),
+    phraseInput=document.getElementById('phraseInput'),phraseWrap=document.getElementById('phraseWrap'),
+    nameMsg=document.getElementById('nameMsg'),nameGo=document.getElementById('nameGo'),
+    nameSub=document.getElementById('nameSub'),
+    resultsScreen=document.getElementById('resultsScreen'),
+    lbList=document.getElementById('lbList'),histList=document.getElementById('histList'),
+    lbTitle=document.getElementById('lbTitle'),
+    nameBtn=document.getElementById('nameBtn'),logoutBtn=document.getElementById('logoutBtn');
 
 var dpr=1,cssW=0,cssH=0;
 function resize(){
@@ -399,6 +536,165 @@ function yesterdayStr(ds){var d=new Date(ds+'T12:00:00');d.setDate(d.getDate()-1
 function fmt(ms){var t=Math.max(0,ms)/1000,m=Math.floor(t/60),s=t-m*60;return m+':'+(s<10?'0':'')+s.toFixed(1);}
 function prettyDate(ds){return new Date(ds+'T12:00:00').toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'});}
 function shortDate(ds){return new Date(ds+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'});}
+
+/* ---------- results history (local) ---------- */
+var RES_LS='dailyrace.results';
+function loadResults(){try{var a=JSON.parse(localStorage.getItem(RES_LS));return Array.isArray(a)?a:[];}catch(e){return[];}}
+function recordResult(rec){
+  var a=loadResults();a.push(rec);
+  if(a.length>300)a=a.slice(-300);
+  try{localStorage.setItem(RES_LS,JSON.stringify(a));}catch(e){}
+  return a;
+}
+/* ---------- driver identity: claimable username, no accounts ---------- */
+var USER_LS='dailyrace.user';
+function getUser(){try{return JSON.parse(localStorage.getItem(USER_LS))||null;}catch(e){return null;}}
+function setUser(u){try{localStorage.setItem(USER_LS,JSON.stringify(u));}catch(e){}}
+function clearUser(){try{localStorage.removeItem(USER_LS);}catch(e){}}
+function validName(n){return typeof n==='string'&&/^[A-Za-z0-9 ]{1,16}$/.test(n.trim());}
+function sha256hex(str){
+  if(!(window.crypto&&crypto.subtle))return Promise.reject(new Error('no crypto'));
+  return crypto.subtle.digest('SHA-256',new TextEncoder().encode(str)).then(function(h){
+    var b=new Uint8Array(h),s='';
+    for(var i=0;i<b.length;i++)s+=('0'+b[i].toString(16)).slice(-2);
+    return s;
+  });
+}
+/* ---------- leaderboard API (graceful: null when offline/unconfigured) ---------- */
+function lbOn(){return !!LEADERBOARD_URL;}
+function lbPost(obj){
+  if(!lbOn())return Promise.resolve(null);
+  return fetch(LEADERBOARD_URL,{method:'POST',redirect:'follow',
+    headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(obj)})
+    .then(function(r){return r.json();})
+    .catch(function(){return null;});
+}
+function lbBoard(){
+  if(!lbOn())return Promise.resolve(null);
+  var url=LEADERBOARD_URL+'?game='+encodeURIComponent(GAME_ID)+'&date='+encodeURIComponent(dateStr());
+  return fetch(url,{redirect:'follow'}).then(function(r){return r.json();}).catch(function(){return null;});
+}
+function tierClass(t){
+  return 'tier-'+t.replace('FRONT ROW','FROW').replace('PIT LANE','PITLANE').replace(/ /g,'');
+}
+function showTier(tier){
+  resTier.textContent=tier;
+  resTier.className=tierClass(tier);
+  resTier.style.opacity='1';
+}
+function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+
+/* ---------- driver name: claim-or-unlock flow ---------- */
+var nameState='name',pendingName='',nameAfter=null;
+function refreshNameBtn(){
+  var u=getUser();
+  nameBtn.textContent='driver: '+(u?u.name:'not set');
+}
+function openName(after){
+  if(!lbOn()){if(after)after();return;}
+  nameAfter=after||null;nameState='name';pendingName='';
+  nameInput.value='';phraseInput.value='';
+  phraseWrap.classList.add('hidden');nameMsg.textContent='';
+  nameSub.textContent='Claim a name for the daily leaderboard.';
+  nameGo.textContent='CHECK NAME';
+  nameScreen.classList.remove('hidden');
+  setTimeout(function(){nameInput.focus();},60);
+}
+function closeName(){nameScreen.classList.add('hidden');nameAfter=null;}
+nameGo.addEventListener('click',function(){
+  if(nameState==='name'){
+    var n=nameInput.value.trim();
+    if(!validName(n)){nameMsg.textContent='Letters, numbers and spaces only, max 16 chars.';return;}
+    nameMsg.textContent='checking\u2026';
+    lbPost({action:'check',username:n}).then(function(res){
+      if(!res){nameMsg.textContent='Could not reach the leaderboard. Try again.';return;}
+      if(res.status==='invalid'){nameMsg.textContent='Letters, numbers and spaces only, max 16 chars.';return;}
+      pendingName=res.display||n;
+      phraseWrap.classList.remove('hidden');nameMsg.textContent='';
+      if(res.status==='free'){
+        nameState='claim';
+        nameSub.textContent='\u201C'+pendingName+'\u201D is yours \u2014 set a password phrase to lock it in.';
+        nameGo.textContent='CLAIM NAME';
+      }else{
+        nameState='unlock';
+        nameSub.textContent='\u201C'+pendingName+'\u201D is taken \u2014 enter its password phrase to use it.';
+        nameGo.textContent='UNLOCK NAME';
+      }
+      setTimeout(function(){phraseInput.focus();},60);
+    });
+  }else{
+    var ph=phraseInput.value;
+    if(ph.length<4){nameMsg.textContent='Phrase needs at least 4 characters.';return;}
+    nameMsg.textContent='working\u2026';
+    sha256hex(pendingName.toLowerCase()+'|'+ph).then(function(hash){
+      var act=nameState==='claim'?'claim':'verify';
+      return lbPost({action:act,username:pendingName,phrase_hash:hash}).then(function(res){
+        return{res:res,hash:hash};
+      });
+    }).then(function(out){
+      var res=out.res;
+      if(res&&res.ok){
+        setUser({name:pendingName,hash:out.hash});
+        refreshNameBtn();closeName();
+        var f=nameAfter;nameAfter=null;
+        if(f)f();
+      }else{
+        nameMsg.textContent=(res&&res.error)||'Wrong phrase \u2014 try again.';
+      }
+    }).catch(function(){
+      nameMsg.textContent='Something went wrong. Try again.';
+    });
+  }
+});
+document.getElementById('nameCancel').addEventListener('click',closeName);
+nameBtn.addEventListener('click',function(){openName(null);});
+logoutBtn.addEventListener('click',function(){clearUser();refreshNameBtn();renderResultsLists();});
+function autoVerify(){
+  var u=getUser();
+  if(!lbOn()||!u||!u.hash)return;
+  lbPost({action:'verify',username:u.name,phrase_hash:u.hash}).then(function(res){
+    if(res&&!res.ok){clearUser();refreshNameBtn();}
+  });
+}
+
+/* ---------- results screen: today's board + your history ---------- */
+function renderResultsLists(){
+  var all=loadResults();
+  var dailyTimes=all.filter(function(x){return x.mode==='daily';}).map(function(x){return x.time;});
+  var hist=all.slice().reverse(),html='';
+  for(var i=0;i<hist.length;i++){
+    var r=hist[i],t=tierForPersonal(r.time,dailyTimes);
+    html+='<div class="lbRow"><span>'+esc(shortDate(r.date))+' '+(r.mode==='daily'?'D':'P')+'</span><span>'+esc(fmt(r.time))+'</span><span class="'+tierClass(t)+'">'+t+'</span></div>';
+  }
+  histList.innerHTML=html||'<div class="lbRow"><span>no runs yet</span><span></span><span></span></div>';
+  if(!lbOn()){
+    lbTitle.textContent='Leaderboard offline \u2014 set LEADERBOARD_URL to enable';
+    lbList.innerHTML='<div class="lbRow"><span>local mode</span><span></span><span></span></div>';
+    return;
+  }
+  lbTitle.textContent='Today\u2019s leaderboard';
+  lbList.innerHTML='<div class="lbRow"><span>loading\u2026</span><span></span><span></span></div>';
+  lbBoard().then(function(board){
+    if(!board||!board.entries||!board.entries.length){
+      lbList.innerHTML='<div class="lbRow"><span>no drivers yet today</span><span></span><span></span></div>';
+      return;
+    }
+    var u=getUser(),me=u?u.name.toLowerCase():null,h='';
+    for(var i=0;i<board.entries.length;i++){
+      var e=board.entries[i],isMe=me&&String(e.username).toLowerCase()===me;
+      var tr2=tierForRank(i+1,board.entries.length);
+      h+='<div class="lbRow'+(isMe?' me':'')+'"><span>P'+(i+1)+' '+esc(e.username)+'</span><span>'+esc(fmt(e.score))+'</span><span class="'+tierClass(tr2)+'">'+tr2+'</span></div>';
+    }
+    lbList.innerHTML=h;
+  });
+}
+function openResults(){
+  resultsScreen.classList.remove('hidden');
+  renderResultsLists();
+}
+document.getElementById('resultsClose').addEventListener('click',function(){
+  resultsScreen.classList.add('hidden');
+});
 
 /* ---------- game state ---------- */
 var state='start';            /* start | countdown | racing | paused | finished */
@@ -507,6 +803,44 @@ function finishRace(){
   var d2=s.days[ds];
   document.getElementById('resBest').textContent=(!practice&&d2&&d2.best)?fmt(d2.best):'--';
   document.getElementById('resStreak').textContent='\uD83D\uDD25'+(s.streak.count||0);
+  /* record the run and tier it */
+  var rec={date:ds,mode:practice?'practice':'daily',time:Math.round(totalMs),
+           pops:car.stats.pops,spins:car.stats.spins,overtakes:car.stats.overtakes};
+  var allRes=recordResult(rec);
+  var dailyTimes=allRes.filter(function(r){return r.mode==='daily';}).map(function(r){return r.time;});
+  var myMs=Math.round(totalMs);
+  resRank.textContent='';
+  if(practice){
+    showTier(tierForPersonal(myMs,dailyTimes));
+    resRank.textContent='practice \u2014 not ranked \u00B7 run #'+allRes.length;
+  }else if(lbOn()&&getUser()){
+    (function(){
+      var u=getUser();
+      resTier.textContent='\u2026';resTier.className='';resTier.style.opacity='0.5';
+      resRank.textContent='submitting\u2026';
+      lbPost({action:'submit',game:GAME_ID,date:ds,username:u.name,phrase_hash:u.hash,score:myMs})
+        .then(function(sres){
+          if(!sres||!sres.ok)throw new Error('offline');
+          return lbBoard().then(function(b){return{best:sres.best,board:b};});
+        })
+        .then(function(out){
+          var en=(out.board&&out.board.entries)||[];
+          var rank=1;
+          for(var i=0;i<en.length;i++)if(en[i].score<out.best)rank++;
+          var total=en.length||1;
+          var pct=Math.round((1-(rank-1)/total)*100);
+          showTier(tierForRank(rank,total));
+          resRank.textContent='P'+rank+' of '+total+' \u00B7 '+pct+'th percentile \u00B7 run #'+dailyTimes.length;
+        })
+        .catch(function(){
+          showTier(tierForPersonal(myMs,dailyTimes));
+          resRank.textContent='offline \u2014 personal tier \u00B7 run #'+dailyTimes.length;
+        });
+    })();
+  }else{
+    showTier(tierForPersonal(myMs,dailyTimes));
+    resRank.textContent=(lbOn()?'no driver name \u2014 set one to rank':'local mode')+' \u00B7 run #'+dailyTimes.length;
+  }
   document.getElementById('shareMsg').textContent='';
   resultScreen.classList.remove('hidden');
 }
@@ -781,28 +1115,30 @@ function render(){
     ctx.restore();
   }
 
-  /* blockers: striped warning barriers sweeping one side */
+  /* blocker rows: striped barriers spanning the road except the gap */
   for(j=0;j<track.blockers.length;j++){
     var bl=track.blockers[j];
-    var bp=blockerPos(track,bl,raceT);
-    if(!inR(bp.x,bp.y))continue;
-    var bc=pts[bl.seg];
-    ctx.save();ctx.translate(bp.x,bp.y);ctx.rotate(bc.hd);
-    var L=bc.w*0.30,W=22;
-    ctx.fillStyle='rgba(0,0,0,0.35)';rr(-L/2+2,-W/2+3,L,W,7);ctx.fill();
-    ctx.fillStyle='#f5b301';rr(-L/2,-W/2,L,W,7);ctx.fill();
-    ctx.save();rr(-L/2,-W/2,L,W,7);ctx.clip();
-    ctx.fillStyle='#151a24';
-    for(var sx=-L/2-W;sx<L/2+W;sx+=20){
-      ctx.beginPath();
-      ctx.moveTo(sx,-W/2);ctx.lineTo(sx+11,-W/2);ctx.lineTo(sx+11-W,W/2);ctx.lineTo(sx-W,W/2);
-      ctx.closePath();ctx.fill();
+    var spans=rowBarriers(track,bl);
+    for(var sp=0;sp<2;sp++){
+      var bs=spans[sp];
+      if(bs.len<8||!inR(bs.x,bs.y))continue;
+      ctx.save();ctx.translate(bs.x,bs.y);ctx.rotate(bs.hd);
+      var L=bs.len,W=22;
+      ctx.fillStyle='rgba(0,0,0,0.35)';rr(-L/2+2,-W/2+3,L,W,7);ctx.fill();
+      ctx.fillStyle='#f5b301';rr(-L/2,-W/2,L,W,7);ctx.fill();
+      ctx.save();rr(-L/2,-W/2,L,W,7);ctx.clip();
+      ctx.fillStyle='#151a24';
+      for(var sx=-L/2-W;sx<L/2+W;sx+=20){
+        ctx.beginPath();
+        ctx.moveTo(sx,-W/2);ctx.lineTo(sx+11,-W/2);ctx.lineTo(sx+11-W,W/2);ctx.lineTo(sx-W,W/2);
+        ctx.closePath();ctx.fill();
+      }
+      ctx.restore();
+      ctx.strokeStyle='rgba(8,12,20,0.75)';ctx.lineWidth=2;rr(-L/2,-W/2,L,W,7);ctx.stroke();
+      ctx.fillStyle=(Math.sin(raceT*7+j*1.7)>0)?'#ef4444':'#7f1d1d';
+      ctx.beginPath();ctx.arc(0,0,4.5,0,6.283);ctx.fill();
+      ctx.restore();
     }
-    ctx.restore();
-    ctx.strokeStyle='rgba(8,12,20,0.75)';ctx.lineWidth=2;rr(-L/2,-W/2,L,W,7);ctx.stroke();
-    ctx.fillStyle=(Math.sin(raceT*7+bl.phase)>0)?'#ef4444':'#7f1d1d';
-    ctx.beginPath();ctx.arc(0,0,4.5,0,6.283);ctx.fill();
-    ctx.restore();
   }
 
   /* AI traffic: simple colored cars cruising their lanes, slower than the player */
@@ -837,6 +1173,13 @@ function render(){
   /* back to screen space: the car, always pointing straight up */
   ctx.setTransform(dpr,0,0,dpr,0,0);
   drawCarScreen();
+  /* oil-slow cue */
+  if(car&&state==='racing'&&raceT>=car.spinUntil&&raceT<car.slowUntil){
+    ctx.fillStyle='rgba(251,191,36,0.95)';
+    ctx.font='800 15px -apple-system,BlinkMacSystemFont,sans-serif';
+    ctx.textAlign='center';
+    ctx.fillText('SLOWED \u22125%',cssW/2,cssH*0.62-58);
+  }
 }
 
 /* ---------- main loop ---------- */
@@ -876,7 +1219,14 @@ function loop(ts){
 }
 
 /* ---------- buttons ---------- */
-document.getElementById('playBtn').addEventListener('click',function(){startRace(false);});
+document.getElementById('playBtn').addEventListener('click',function(){
+  if(lbOn()&&!getUser())openName(function(){startRace(false);});
+  else startRace(false);
+});
+document.getElementById('resultsBtn').addEventListener('click',function(){
+  if(lbOn()&&!getUser())openName(openResults);
+  else openResults();
+});
 document.getElementById('practiceBtn').addEventListener('click',function(){startRace(true);});
 document.getElementById('againBtn').addEventListener('click',function(){startRace(true);});
 document.getElementById('homeBtn').addEventListener('click',showStart);
@@ -891,6 +1241,7 @@ document.getElementById('shareBtn').addEventListener('click',function(){
   var msg=document.getElementById('shareMsg');
   var s=load(),ds=dateStr();
   var txt='Daily Race '+shortDate(ds)+' \u2014 '+document.getElementById('resTime').textContent+' \uD83C\uDFC1';
+  if(resTier.textContent&&resTier.textContent!=='\u2026')txt+=' \u00B7 '+resTier.textContent;
   if(!practice&&s.streak.count>1)txt+='\n\uD83D\uDD25 '+s.streak.count+'-day streak';
   function done(){msg.textContent='Copied \u2014 paste it anywhere!';}
   function fallback(){
@@ -903,6 +1254,8 @@ document.getElementById('shareBtn').addEventListener('click',function(){
   else fallback();
 });
 
+refreshNameBtn();
+autoVerify();
 showStart();
 requestAnimationFrame(loop);
 })();
